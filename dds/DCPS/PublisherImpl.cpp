@@ -153,8 +153,8 @@ PublisherImpl::create_datawriter(
     const DDS::ReturnCode_t ret = dw_servant->enable();
 
     if (ret != DDS::RETCODE_OK) {
-      ACE_ERROR((LM_ERROR,
-          ACE_TEXT("(%P|%t) ERROR: ")
+      ACE_ERROR((LM_WARNING,
+          ACE_TEXT("(%P|%t) WARNING: ")
           ACE_TEXT("PublisherImpl::create_datawriter, ")
           ACE_TEXT("enable failed.\n")));
       return DDS::DataWriter::_nil();
@@ -171,17 +171,15 @@ DDS::ReturnCode_t
 PublisherImpl::delete_datawriter(DDS::DataWriter_ptr a_datawriter)
 {
   DataWriterImpl* dw_servant = dynamic_cast<DataWriterImpl*>(a_datawriter);
-  if (dw_servant) {
-    // marks entity as deleted and stops future associating
-    dw_servant->prepare_to_delete();
-  }
-
   if (!dw_servant) {
     ACE_ERROR((LM_ERROR,
               "(%P|%t) PublisherImpl::delete_datawriter - dynamic cast to DataWriterImpl failed\n"
     ));
     return DDS::RETCODE_ERROR;
   }
+
+  // marks entity as deleted and stops future associating
+  dw_servant->prepare_to_delete();
 
   {
     DDS::Publisher_var dw_publisher(dw_servant->get_publisher());

@@ -23,7 +23,7 @@ use warnings;
 ## Version of OCI's TAO to download
 my $oci_tao_version = '2.2a';
 ## Version of DOC Group ACE/TAO to download, uses the ACE version number
-my $doc_tao_version = '6.4.8';
+my $doc_tao_version = '6.5.1';
 
 # save args before Getopt modifies them
 my @ARGS = @ARGV;
@@ -50,9 +50,6 @@ my %platforminfo =
    'macosx' => {
                 'compilers' => ['clang++'],
                 'libpath' => 'DYLD_LIBRARY_PATH',
-                'versions' => {5 => 'leopard', 6 => 'snowleopard', 7 => 'lion',
-                               8 => 'mountainlion', 9 => 'mavericks',
-                               10 => 'yosemite', 11 => 'elcapitan'},
                },
    'solaris' => {
                  'compilers' => ['CC', 'g++'],
@@ -165,8 +162,9 @@ my @specs = # Array of array-refs, each inner array is an option group which
     'boost:s', 'Boost (use BOOST_ROOT or system pkg)',
     'boost-version:s', 'Boost version (only if needed to find headers)',
     'xerces3:s', 'Xerces-C++ 3 for QoS XML handling (optional)',
+    'ssl:s', 'OpenSSL for cryptography (optional)',
    ],
-   ['Minimizing OpenDDS:',
+   ['Optional OpenDDS features:',
     'built-in-topics!', 'Built-in Topics (yes)',
     'content-subscription!', 'Content-Subscription Profile (yes)',
     'content-filtered-topic!', 'ContentFilteredTopic (CS Profile) (yes)',
@@ -178,6 +176,7 @@ my @specs = # Array of array-refs, each inner array is an option group which
     'persistence-profile!', 'Persistence Profile (yes)',
     'safety-profile:s', 'Safety Profile: base or extended (none)',
     'tests!', 'Build tests, examples, and performance tests (yes)',
+    'security!', 'DDS Security plugin (no)',
    ],
   );
 
@@ -782,6 +781,7 @@ sub write_platform_macros {
     my $pi = $platforminfo{$opts{$buildEnv{'build'}}};
     my $PMG = backup_and_open("$buildEnv{'ACE_ROOT'}/include/makeinclude" .
                                "/platform_macros.GNU");
+    my $macro_cross_compile = 0;
     if ($buildEnv{'build'} eq 'target') {
       for my $line (@{$opts{'macros'}}) {
         print $PMG "$line\n";
@@ -801,6 +801,7 @@ sub write_platform_macros {
         if ($opts{'target-compiler'}) {
           my $tcomp = $opts{'target-compiler'};
           if ($tcomp =~ s/-g([c+])\1$/-/) {
+            $macro_cross_compile = 1;
             print $PMG 'CROSS_COMPILE = ', $tcomp, "\n";
           }
           else {
@@ -829,7 +830,7 @@ sub write_platform_macros {
     }
     $plat .= '_' . $opts{'host_version'} if $opts{'host_version'};
     print $PMG "include \$(ACE_ROOT)/include/makeinclude/platform_$plat.GNU\n";
-    if ($opts{'nonstdcompiler'}) {
+    if ($opts{'nonstdcompiler'} && !$macro_cross_compile) {
       for my $var ('CC', 'CXX', 'LD') {
         print $PMG "$var = $opts{'compiler'}\n";
       }
@@ -859,6 +860,9 @@ my %optdep =
    'qt' =>        ['QTDIR',         '',                            'qt4'],
    'boost' =>     ['BOOST_ROOT',    'include/boost/version.hpp',   'boost'],
    'xerces3' =>   ['XERCESCROOT',   'include/xercesc/dom/DOM.hpp', 'xerces3'],
+   'ssl' =>       ['SSL_ROOT',      'include/openssl/ssl.h',       'ssl'],
+   'cmake' =>     ['CMAKE_ROOT', 'bin/cmake' . (($slash eq '/') ? '' : '.exe')],
+
   );
 
 my @ace_features = ('xerces3');
@@ -899,8 +903,32 @@ if (exists $opts{'wirehshark_cmake'} && !exists $opts{'wireshark_lib'}) {
   $wireshark_lib_defaulted = 1;
 }
 
-my %use_system_pkg = map {$_, 1} qw/ant glib qt boost xerces3/;
-my %use_win_default = ('boost' => 'c:\\Boost');
+## Security
+
+if ($opts{'security'}) {
+  if (! exists $opts{'ssl'}) {
+    $opts{'ssl'} = '';
+    print "Forcing --ssl (security dependency)\n" if $opts{'verbose'};
+  }
+  if (! exists $opts{'xerces3'}) {
+    $opts{'xerces3'} = '';
+    print "Forcing --xerces3 (security dependency)\n" if $opts{'verbose'};
+  }
+  if ($opts{'tests'}) {
+    # CMake is not something users specify on the command-line but it's
+    # treated as such here for code-reuse. CMake is required in order to
+    # compile the Google Test framework (which security tests rely on).
+    $opts{'cmake'} = '';
+    print "Forcing --cmake (security + tests dependency)\n" if $opts{'verbose'};
+  }
+}
+
+my %use_system_pkg = map {$_, 1} qw/ant glib qt boost xerces3 ssl cmake/;
+my %use_win_default = (
+    'boost' => ['c:\\Boost'],
+    'cmake' => ['c:\\Program Files (x86)\\CMake',
+                'c:\\Program Files\\CMake']);
+
 my %need_platform_macros = map {$_, 1} qw/xerces3/;
 
 sub default_java_home {
@@ -924,6 +952,8 @@ sub default_java_home {
   }
 }
 
+# Detect and populate dependency info from environment variables
+# or system-wide default paths.
 for my $key (keys %optdep) {
   if (exists $opts{$key} && $opts{$key} eq '') {
     if (defined $optdep{$key}->[0] && $ENV{$optdep{$key}->[0]}) {
@@ -944,8 +974,18 @@ for my $key (keys %optdep) {
       print "Defaulting $key to /usr\n" if $opts{'verbose'};
     }
     elsif ($slash ne '/' && exists $use_win_default{$key}) {
-      $opts{$key} = $use_win_default{$key};
-      print "Defaulting $key to $use_win_default{$key}\n" if $opts{'verbose'};
+      # Use the first available default
+      for my $dir (@{$use_win_default{$key}}) {
+        if (-d $dir) {
+          $opts{$key} = $dir;
+          last;
+        }
+      }
+      if ($opts{$key} eq '') {
+        die "Default '$key' directory not found. Searched '" .
+              join(', ', @{$use_win_default{$key}}) . "'\n";
+      }
+      print "Defaulting $key to $opts{$key}\n" if $opts{'verbose'};
     }
     elsif ($key eq 'java') {
 
@@ -996,6 +1036,8 @@ if (exists $opts{'boost'} && exists $opts{'boost-version'}) {
   }
 }
 
+# Enable MPC features and populate expected environment variables
+# for all required "optional" dependencies.
 my @features;
 for my $key (keys %optdep) {
   if (exists $opts{$key}) {
@@ -1009,6 +1051,32 @@ for my $key (keys %optdep) {
     push(@platformmacros, $m) if $need_platform_macros{$key};
   }
 }
+
+## Google Test
+if ($opts{'security'} && $opts{'tests'} && $opts{'cmake'}) {
+  my $cwd = Cwd::getcwd();
+  my $build_dir = 'tests/googletest/build';
+  my $cmake = $opts{'cmake'} . '/' . $optdep{'cmake'}->[1];
+  my @cmake_cmds = (["$cmake", ".."],
+                    ["$cmake", "--build", "."]);
+
+  mkdir($build_dir)
+    or die "ERROR '$!': failed to make directory $build_dir from $cwd"
+      if ! -d $build_dir;
+    
+  chdir($build_dir)
+    or  die "ERROR '$!': failed to change into $build_dir from $cwd";
+
+  for my $cmd (@cmake_cmds) {
+    print "Running @{$cmd}...\n";
+    system(@{$cmd}) == 0
+      or die "ERROR: Invoking @{$cmd} failed with error '$?'\n";
+  }
+
+  chdir($cwd)
+    or  die "ERROR '$!': failed to change back to $cwd";
+}
+
 
 if (exists $opts{'jboss'} && !exists $opts{'java'}) {
   die "ERROR: --java is required for --jboss (OpenDDS JMS Provider)\n";
@@ -1051,7 +1119,6 @@ if (exists $opts{'wireshark_lib'} && !exists $opts{'wireshark_cmake'}) {
 if (exists $opts{'wireshark_build'} && !exists $opts{'wireshark_cmake'}) {
   die "ERROR: --wireshark_cmake is required for --wireshark_build\n";
 }
-
 
 if ($opts{'glib'}) {
   if (!-r "$opts{'glib'}/lib/glib-2.0/include/glibconfig.h") {
@@ -1164,6 +1231,10 @@ sub generate_workspace {
     }
   }
 
+  if ($opts{'security'}) {
+      disable_feature(\@features, 'no-opendds-security');
+  }
+
   # default of these depends on whether we are doing a safety-profile build
   for my $feat (qw/content-subscription content-filtered-topic
                    multi-topic query-condition ownership-kind-exclusive
@@ -1252,6 +1323,10 @@ EOT
         open(my $fh, '<', $file) or die "ERROR: Could not open $file: $!";
         while (my $row = <$fh>) {
           chomp $row;
+          $row =~ s/\/\/.*//;
+          $row =~ s/^\s+//;
+          $row =~ s/\s+$//;
+          next if $row eq '';
           my ($key, $value) = split(/=/, $row);
           $existing_features{$key} = $value;
         }
@@ -1427,7 +1502,7 @@ sub write_environment {
   }
 }
 
-sub get_mac_version {
+sub check_mac_version {
   my $buildEnvRef = shift;
   if (-r "$buildEnvRef->{ACE_ROOT}/ace/config-macosx.h") {
     my $cfg = new FileHandle("$buildEnvRef->{ACE_ROOT}/ace/config-macosx.h");
@@ -1438,13 +1513,8 @@ sub get_mac_version {
     }
   }
 
-  my $vers = `sw_vers -productVersion`;
-  $vers =~ /10\.(\d+)\.?/;
-  if (!exists $platforminfo{'macosx'}->{'versions'}->{$1}) {
-    die "ERROR: Unknown/unsupported Mac OS X version: $1, stopped";
-  }
-  $opts{'host_version'} = $platforminfo{'macosx'}->{'versions'}->{$1};
-  print "Mac OS X version is: $opts{'host_version'}\n" if $opts{'verbose'};
+  die "ERROR: This version of ACE doesn't contain the required configuration " .
+    "files for Apple macOS.  Stopped";
 }
 
 sub configure_build {
@@ -1453,7 +1523,7 @@ sub configure_build {
     print "ACE_ROOT/ace/config.h exists, skipping configuration of ACE+TAO\n";
   }
   else {
-    get_mac_version($buildEnvRef) if $opts{'host'} eq 'macosx';
+    check_mac_version($buildEnvRef) if $opts{'host'} eq 'macosx';
 
     write_config_h($buildEnvRef);
     write_default_features($buildEnvRef);
@@ -1553,6 +1623,10 @@ if ($cross_compile) {
   unless ($opts{'static'}) {
     push_libpath(\%targetEnv, $targetEnv{'ACE_ROOT'} . $slash . 'lib');
     push_libpath(\%targetEnv, $targetEnv{'DDS_ROOT'} . $slash . 'lib');
+
+    if ($opts{'ssl'}) {
+      push_libpath(\%targetEnv, $targetEnv{'SSL_ROOT'} . $slash . 'lib');
+    }
   }
 
   configure_build(\%targetEnv);
@@ -1573,6 +1647,10 @@ else { # not cross-compiling:
   unless ($opts{'static'}) {
     push_libpath(\%targetEnv, $targetEnv{'ACE_ROOT'} . $slash . 'lib');
     push_libpath(\%targetEnv, $targetEnv{'DDS_ROOT'} . $slash . 'lib');
+
+    if ($opts{'ssl'}) {
+      push_libpath(\%targetEnv, $targetEnv{'SSL_ROOT'} . $slash . 'lib');
+    }
   }
 
   configure_build(\%targetEnv);
