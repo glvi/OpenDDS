@@ -124,15 +124,9 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   const char* id_sn = tr.get_property_value("dds.cert.sn");
 
   OpenDDS::Security::SSL::SubjectName sn_id;
-  OpenDDS::Security::SSL::SubjectName sn_perm;
 
-  const std::string& perm_sn = permissions->subject_name();
-
-  if (id_sn == NULL || perm_sn.empty() ||
-      sn_id.parse(id_sn) != 0 ||
-      sn_perm.parse(perm_sn, true) != 0 ||
-      sn_id != sn_perm) {
-    CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::validate_local_permissions: Permissions subject name does not match identity subject name");
+  if (id_sn == NULL || sn_id.parse(id_sn) != 0 || !permissions->contains_subject_name(sn_id)) {
+    CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::validate_local_permissions: No permissions subject name matches identity subject name");
     return DDS::HANDLE_NIL;
   }
 
@@ -160,7 +154,6 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
   // If all checks are successful load the content into cache
   Permissions::AcPerms& perm_data = permissions->data();
-  perm_data.domain_id = domain_id;
   perm_data.perm_token = permissions_token;
   perm_data.perm_cred_token = permissions_cred_token;
 
@@ -169,6 +162,9 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   ACE_GUARD_RETURN(ACE_Thread_Mutex, guard, handle_mutex_, 0);
 
   AccessData cache_this;
+  cache_this.identity = identity;
+  cache_this.subject = sn_id;
+  cache_this.domain_id = domain_id;
   cache_this.perm = permissions;
   cache_this.gov = governance;
   cache_this.local_access_credential_data = local_access_credential_data;
@@ -182,7 +178,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 ::DDS::Security::PermissionsHandle AccessControlBuiltInImpl::validate_remote_permissions(
   ::DDS::Security::Authentication_ptr auth_plugin,
   ::DDS::Security::IdentityHandle local_identity_handle,
-  ::DDS::Security::IdentityHandle /*remote_identity_handle*/,
+  ::DDS::Security::IdentityHandle remote_identity_handle,
   const ::DDS::Security::PermissionsToken & remote_permissions_token,
   const ::DDS::Security::AuthenticatedPeerCredentialToken & remote_credential_token,
   ::DDS::Security::SecurityException & ex)
@@ -227,9 +223,9 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return DDS::HANDLE_NIL;
   }
 
-  Permissions::shared_ptr permissions = DCPS::make_rch<Permissions>();
+  Permissions::shared_ptr remote_permissions = DCPS::make_rch<Permissions>();
 
-  err = permissions->load(remote_perm_doc);
+  err = remote_permissions->load(remote_perm_doc);
   if (err)
   {
     CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::validate_remote_permissions: Invalid permission file");
@@ -272,29 +268,26 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   remote_cert->subject_name_to_str(remote_identity_sn);
 
   OpenDDS::Security::SSL::SubjectName sn_id_remote;
-  OpenDDS::Security::SSL::SubjectName sn_perm_remote;
 
-  const std::string& remote_perm_sn = permissions->subject_name();
-  if (remote_identity_sn.empty() || remote_perm_sn.empty() ||
-      sn_id_remote.parse(remote_identity_sn) != 0 ||
-      sn_perm_remote.parse(remote_perm_sn, true) != 0 ||
-      sn_id_remote != sn_perm_remote) {
+  if (remote_identity_sn.empty() || sn_id_remote.parse(remote_identity_sn) != 0 || !remote_permissions->contains_subject_name(sn_id_remote)) {
     CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::validate_remote_permissions: "
-                                        "Remote permissions subject name does not match remote identity subject name");
+                                        "Remote identity subject name does not match any subject name in remote permissions grants");
     return DDS::HANDLE_NIL;
   }
 
   // Set and store the permissions credential token while we have the raw content
 
-  Permissions::AcPerms& perm_data = permissions->data();
-  perm_data.domain_id = piter->second.perm->data().domain_id;
+  Permissions::AcPerms& perm_data = remote_permissions->data();
   perm_data.perm_token = remote_permissions_token;
   perm_data.perm_cred_token = remote_credential_token;
 
   ::CORBA::Long perm_handle = generate_handle();
 
   AccessData cache_this;
-  cache_this.perm = permissions;
+  cache_this.identity = remote_identity_handle;
+  cache_this.subject = sn_id_remote;
+  cache_this.domain_id = piter->second.domain_id;
+  cache_this.perm = remote_permissions;
   cache_this.gov = piter->second.gov;
   cache_this.local_access_credential_data = local_access_credential_data;
 
@@ -304,7 +297,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
 ::CORBA::Boolean AccessControlBuiltInImpl::check_create_participant(
   ::DDS::Security::PermissionsHandle permissions_handle,
-  ::DDS::Security::DomainId_t /*domain_id*/,
+  ::DDS::Security::DomainId_t domain_id,
   const ::DDS::DomainParticipantQos & /*qos*/,
   ::DDS::Security::SecurityException & ex)
 {
@@ -340,7 +333,12 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  ::DDS::Security::DomainId_t domain_to_find = piter->second.perm->data().domain_id;
+  if (domain_id != piter->second.domain_id) {
+    CommonUtilities::set_security_error(ex,-1, 0, "AccessControlBuiltInImpl::check_create_participant: Domain does not match validated permissions handle");
+    return false;
+  }
+
+  ::DDS::Security::DomainId_t domain_to_find = domain_id;
 
   gov_iter begin = piter->second.gov->access_rules().begin();
   gov_iter end = piter->second.gov->access_rules().end();
@@ -515,7 +513,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
 ::CORBA::Boolean AccessControlBuiltInImpl::check_create_topic(
   ::DDS::Security::PermissionsHandle permissions_handle,
-  ::DDS::Security::DomainId_t /*domain_id*/,
+  ::DDS::Security::DomainId_t domain_id,
   const char * topic_name,
   const ::DDS::TopicQos & /*qos*/,
   ::DDS::Security::SecurityException & ex)
@@ -540,7 +538,12 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
   // Check the Governance file for allowable topic attributes
 
-  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.perm->data().domain_id;
+  if (domain_id != ac_iter->second.domain_id) {
+    CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_create_topic: Requested domain ID does not match permissions handle");
+    return false;
+  }
+
+  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.domain_id;
 
   gov_iter begin = ac_iter->second.gov->access_rules().begin();
   gov_iter end = ac_iter->second.gov->access_rules().end();
@@ -569,35 +572,45 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  Permissions::PermissionGrantRules::iterator pm_iter;
+  // Iterate over grant rules
+  Permissions::PermissionGrantRules::iterator pgr_iter;
+  for (pgr_iter = ac_iter->second.perm->data().perm_rules.begin(); pgr_iter != ac_iter->second.perm->data().perm_rules.end(); ++pgr_iter) {
 
-  for (pm_iter = ac_iter->second.perm->data().perm_rules.begin(); pm_iter != ac_iter->second.perm->data().perm_rules.end(); ++pm_iter) {
-    perm_topic_rules_iter ptr_iter; // allow/deny rules
+    // Check to make sure our partcipant subject name matches the grant we're looking at
+    if (pgr_iter->subject == ac_iter->second.subject) {
 
-    for (ptr_iter = pm_iter->PermissionTopicRules.begin(); ptr_iter != pm_iter->PermissionTopicRules.end(); ++ptr_iter) {
-      size_t  d = ptr_iter->domain_list.count(domain_to_find);
+      // Iterate over allow / deny rules
+      perm_topic_rules_iter ptr_iter;
+      for (ptr_iter = pgr_iter->PermissionTopicRules.begin(); ptr_iter != pgr_iter->PermissionTopicRules.end(); ++ptr_iter) {
 
-      if ((d > 0) && (ptr_iter->ad_type == Permissions::ALLOW)) {
-        perm_topic_ps_rules_iter tpsr_iter;
+        // Check that our domain is listed and the permissions type is ALLOW before checking futher
+        size_t d = ptr_iter->domain_list.count(domain_to_find);
+        if ((d > 0) && (ptr_iter->ad_type == Permissions::ALLOW)) {
 
-        for (tpsr_iter = ptr_iter->topic_ps_rules.begin(); tpsr_iter != ptr_iter->topic_ps_rules.end(); ++tpsr_iter) {
-          std::vector<std::string>::iterator tl_iter; // topic list
+          // Iterate over pub / sub rules
+          perm_topic_ps_rules_iter tpsr_iter;
+          for (tpsr_iter = ptr_iter->topic_ps_rules.begin(); tpsr_iter != ptr_iter->topic_ps_rules.end(); ++tpsr_iter) {
 
-          for (tl_iter = tpsr_iter->topic_list.begin(); tl_iter != tpsr_iter->topic_list.end(); ++tl_iter) {
-            if (::ACE::wild_match(topic_name, (*tl_iter).c_str(), true, false))
-              return true;
+            // Iterate over topics
+            std::vector<std::string>::iterator tl_iter;
+            for (tl_iter = tpsr_iter->topic_list.begin(); tl_iter != tpsr_iter->topic_list.end(); ++tl_iter) {
+
+              // If we have a match, we're ok to allow topic creation
+              if (::ACE::wild_match(topic_name, (*tl_iter).c_str(), true, false))
+                return true;
+            }
           }
         }
       }
-    }
 
-    // There is no matching rule for topic_name so use the value in default_permission
-    if (strcmp(pm_iter->default_permission.c_str(), "ALLOW") == 0) {
-      return true;
-    }
-    else {
-      CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_create_topic: No matching rule for topic, default permission is DENY.");
-      return false;
+      // There is no matching rule for topic_name so use the value in default_permission
+      if (strcmp(pgr_iter->default_permission.c_str(), "ALLOW") == 0) {
+        return true;
+      }
+      else {
+        CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_create_topic: No matching rule for topic, default permission is DENY.");
+        return false;
+      }
     }
   }
 
@@ -686,7 +699,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
   std::string local_plugin_class_name,
               remote_plugin_class_name;
-  int local_major_ver,
+  int local_major_ver = 0,
       local_minor_ver,
       remote_major_ver,
       remote_minor_ver;
@@ -700,7 +713,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   }
 
   for (ACPermsMap::iterator local_iter = local_ac_perms_.begin(); local_iter != local_ac_perms_.end(); ++local_iter) {
-    if (local_iter->second.perm->data().domain_id == domain_id) {
+    if (local_iter->second.domain_id == domain_id) {
       if (local_iter->first != permissions_handle) {
         std::string local_class_id = local_iter->second.perm->data().perm_token.class_id.in();
 
@@ -761,7 +774,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  if (publication_data.base.base.topic_name == "") {
+  if (publication_data.base.base.topic_name[0] == 0) {
     CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_remote_datawriter: Invalid topic name");
     return false;
   }
@@ -902,7 +915,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  if (topic_data.name == "") {
+  if (topic_data.name[0] == 0) {
     CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_remote_topic: Invalid topic data");
     return false;
   }
@@ -922,7 +935,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 
   std::string local_plugin_class_name,
               remote_plugin_class_name;
-  int local_major_ver,
+  int local_major_ver = 0,
       local_minor_ver,
       remote_major_ver,
       remote_minor_ver;
@@ -936,7 +949,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   }
 
   for (ACPermsMap::iterator local_iter = local_ac_perms_.begin(); local_iter != local_ac_perms_.end(); ++local_iter) {
-    if (local_iter->second.perm->data().domain_id == domain_id) {
+    if (local_iter->second.domain_id == domain_id) {
       if (local_iter->first != permissions_handle) {
         std::string local_class_id = local_iter->second.perm->data().perm_token.class_id.in();
 
@@ -993,37 +1006,50 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  Permissions::PermissionGrantRules::iterator pm_iter;
+  // Iterate over grant rules
+  Permissions::PermissionGrantRules::iterator pgr_iter;
+  for (pgr_iter = ac_iter->second.perm->data().perm_rules.begin(); pgr_iter != ac_iter->second.perm->data().perm_rules.end(); ++pgr_iter) {
 
-  for (pm_iter = ac_iter->second.perm->data().perm_rules.begin(); pm_iter != ac_iter->second.perm->data().perm_rules.end(); ++pm_iter) {
-    perm_topic_rules_iter ptr_iter; // allow/deny rules
+    // Check to make sure our partcipant subject name matches the grant we're looking at
+    if (pgr_iter->subject == ac_iter->second.subject) {
 
-    for (ptr_iter = pm_iter->PermissionTopicRules.begin(); ptr_iter != pm_iter->PermissionTopicRules.end(); ++ptr_iter) {
-      size_t  d = ptr_iter->domain_list.count(domain_id);
+      // Iterate over allow / deny rules
+      perm_topic_rules_iter ptr_iter;
+      for (ptr_iter = pgr_iter->PermissionTopicRules.begin(); ptr_iter != pgr_iter->PermissionTopicRules.end(); ++ptr_iter) {
 
-      if ((d > 0) && (ptr_iter->ad_type == Permissions::ALLOW)) {
-        perm_topic_ps_rules_iter tpsr_iter;
+        // Check that our domain is listed and the permissions type is ALLOW before checking futher
+        size_t d = ptr_iter->domain_list.count(domain_id);
+        if ((d > 0) && (ptr_iter->ad_type == Permissions::ALLOW)) {
 
-        for (tpsr_iter = ptr_iter->topic_ps_rules.begin(); tpsr_iter != ptr_iter->topic_ps_rules.end(); ++tpsr_iter) {
-          if (tpsr_iter->ps_type == Permissions::PUBLISH || tpsr_iter->ps_type == Permissions::SUBSCRIBE) {
-            std::vector<std::string>::iterator tl_iter; // topic list
+          // Iterate over pub / sub rules
+          perm_topic_ps_rules_iter tpsr_iter;
+          for (tpsr_iter = ptr_iter->topic_ps_rules.begin(); tpsr_iter != ptr_iter->topic_ps_rules.end(); ++tpsr_iter) {
 
-            for (tl_iter = tpsr_iter->topic_list.begin(); tl_iter != tpsr_iter->topic_list.end(); ++tl_iter) {
-              if (::ACE::wild_match(topic_data.name, (*tl_iter).c_str(), true, false))
-                return true;
+            // Check to make sure they can publish or subscribe to the topic
+            // TODO Add support for relay permissions once relay only key exchange is supported
+            if (tpsr_iter->ps_type == Permissions::PUBLISH || tpsr_iter->ps_type == Permissions::SUBSCRIBE) {
+
+              // Iterate over topics
+              std::vector<std::string>::iterator tl_iter;
+              for (tl_iter = tpsr_iter->topic_list.begin(); tl_iter != tpsr_iter->topic_list.end(); ++tl_iter) {
+
+                // If we have a match, we're ok to allow topic creation
+                if (::ACE::wild_match(topic_data.name, (*tl_iter).c_str(), true, false))
+                  return true;
+              }
             }
           }
         }
       }
-    }
 
-    // There is no matching rule for topic_name so use the value in default_permission
-    if (strcmp(pm_iter->default_permission.c_str(), "ALLOW") == 0) {
-      return true;
-    }
-    else {
-      CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_remote_topic: No matching rule for topic, default permission is DENY.");
-      return false;
+      // There is no matching rule for topic_name so use the value in default_permission
+      if (strcmp(pgr_iter->default_permission.c_str(), "ALLOW") == 0) {
+        return true;
+      }
+      else {
+        CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_remote_topic: No matching rule for topic, default permission is DENY.");
+        return false;
+      }
     }
   }
 
@@ -1222,7 +1248,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
   }
 
   // Check the Governance file for allowable topic attributes
-  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.perm->data().domain_id;
+  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.domain_id;
 
   gov_iter begin = ac_iter->second.gov->access_rules().begin();
   gov_iter end = ac_iter->second.gov->access_rules().end();
@@ -1265,7 +1291,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
     return false;
   }
 
-  ::DDS::Security::DomainId_t domain_to_find = piter->second.perm->data().domain_id;
+  ::DDS::Security::DomainId_t domain_to_find = piter->second.domain_id;
 
   gov_iter begin = piter->second.gov->access_rules().begin();
   gov_iter end = piter->second.gov->access_rules().end();
@@ -1380,7 +1406,7 @@ AccessControlBuiltInImpl::~AccessControlBuiltInImpl()
 // NOTE: This function will return the time value as UTC
 // Format from DDS Security spec 1.1 is:
 //   CCYY-MM-DDThh:mm:ss[Z|(+|-)hh:mm]
-time_t AccessControlBuiltInImpl::convert_permissions_time(std::string timeString)
+time_t AccessControlBuiltInImpl::convert_permissions_time(const std::string& timeString)
 {
   // Check for a valid length time string, which is 19 characters (up through seconds)
   if (timeString.length() < 19) {
@@ -1466,16 +1492,14 @@ time_t AccessControlBuiltInImpl::convert_permissions_time(std::string timeString
   time_t & delta_time,
   ::DDS::Security::SecurityException & ex)
 {
-  time_t after_time,
-         before_time,
-         cur_utc_time;
+  time_t after_time = 0, cur_utc_time = 0;
   time_t current_date_time = time(0);
 
   perm_grant_iter pbegin = ac_iter->second.perm->data().perm_rules.begin();
   perm_grant_iter pend = ac_iter->second.perm->data().perm_rules.end();
 
   for (perm_grant_iter pm_iter = pbegin; pm_iter != pend; ++pm_iter) {
-    before_time = convert_permissions_time(pm_iter->validity.not_before);
+    const time_t before_time = convert_permissions_time(pm_iter->validity.not_before);
 
     if (before_time == 0) {
       CommonUtilities::set_security_error(ex, -1, 0, "AccessControlBuiltInImpl::check_create_datawriter: Permissions not_before time is invalid.");
@@ -1525,7 +1549,7 @@ CORBA::Boolean AccessControlBuiltInImpl::get_sec_attributes(::DDS::Security::Per
     return false;
   }
 
-  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.perm->data().domain_id;
+  ::DDS::Security::DomainId_t domain_to_find = ac_iter->second.domain_id;
 
   gov_iter begin = ac_iter->second.gov->access_rules().begin();
   gov_iter end = ac_iter->second.gov->access_rules().end();
@@ -1705,7 +1729,7 @@ CORBA::Boolean AccessControlBuiltInImpl::search_local_permissions(
 //                          if (pps_iter->ps_type == Permissions::PUBLISH) {
                           if (pps_iter->ps_type == pub_or_sub) {
                             std::vector<std::string>::iterator pl_iter; // partition list
-                            num_param_partitions = pps_iter->partition_list.size();
+                            num_param_partitions = static_cast<unsigned int>(pps_iter->partition_list.size());
 
                             for (pl_iter = pps_iter->partition_list.begin(); pl_iter != pps_iter->partition_list.end(); ++pl_iter) {
                               // Check the pl_iter value against the list of partitions in the partition parameter
@@ -1880,7 +1904,7 @@ CORBA::Boolean AccessControlBuiltInImpl::search_remote_permissions(
 }
 
 void AccessControlBuiltInImpl::parse_class_id(
-  const std::string class_id,
+  const std::string& class_id,
   std::string & plugin_class_name,
   int & major_version,
   int & minor_version)

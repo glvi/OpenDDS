@@ -5,6 +5,7 @@
 
 #include "gtest/gtest.h"
 #include "dds/DCPS/security/AuthenticationBuiltInImpl.h"
+#include "dds/DCPS/security/OpenSSL_init.h"
 #include "dds/DCPS/GuidUtils.h"
 
 #include "dds/DCPS/security/SSL/Certificate.h"
@@ -69,6 +70,7 @@ struct MockParticipantData
     auth(),
     guid(OpenDDS::DCPS::GUID_UNKNOWN),
     guid_adjusted(OpenDDS::DCPS::GUID_UNKNOWN),
+    guid_adjusted_remote(OpenDDS::DCPS::GUID_UNKNOWN),
     domain_id(),
     ex(),
     id_handle(DDS::HANDLE_NIL),
@@ -1068,6 +1070,7 @@ TEST_F(AuthenticationTest, GetSharedSecret_InitiatorAndReplier_Match)
 
 int main(int argc, char** argv)
 {
+  openssl_init();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

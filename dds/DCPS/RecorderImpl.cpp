@@ -161,7 +161,8 @@ void RecorderImpl::init(
   CORBA::String_var topic_name = a_topic_desc->get_name();
 
 #if !defined (DDS_HAS_MINIMUM_BIT)
-  is_bit_ = topicIsBIT(topic_name.in(), a_topic_desc->get_type_name());
+  CORBA::String_var type_name = a_topic_desc->get_type_name();
+  is_bit_ = topicIsBIT(topic_name.in(), type_name);
 #endif   // !defined (DDS_HAS_MINIMUM_BIT)
 
   qos_ = qos;
@@ -971,7 +972,6 @@ RecorderImpl::enable()
                  ACE_TEXT("(%P|%t) ERROR: RecorderImpl::enable, ")
                  ACE_TEXT("Transport Exception.\n")));
       return DDS::RETCODE_ERROR;
-
     }
 
     const TransportLocatorSeq& trans_conf_info = this->connection_info();
@@ -979,7 +979,6 @@ RecorderImpl::enable()
     CORBA::String_var filterClassName = "";
     CORBA::String_var filterExpression = "";
     DDS::StringSeq exprParams;
-
 
     Discovery_rch disco =
       TheServiceParticipant->get_discovery(this->domain_id_);
@@ -1007,15 +1006,7 @@ RecorderImpl::enable()
     }
   }
 
-  if (topic_servant_) {
-    const CORBA::String_var name = topic_servant_->get_name();
-    DDS::ReturnCode_t return_value = DDS::RETCODE_OK;
-    //   this->participant_servant_->recorder_enabled(name.in(), this);
-
-    return return_value;
-  } else {
-    return DDS::RETCODE_OK;
-  }
+  return DDS::RETCODE_OK;
 }
 
 DDS::InstanceHandle_t
@@ -1047,7 +1038,7 @@ DDS::ReturnCode_t
 RecorderImpl::repoid_to_bit_key(const DCPS::RepoId&     id,
                                 DDS::BuiltinTopicKey_t& key)
 {
-  DDS::InstanceHandle_t publication_handle = this->participant_servant_->id_to_handle(id);
+  DDS::InstanceHandle_t const publication_handle = this->participant_servant_->id_to_handle(id);
 
   ACE_GUARD_RETURN(ACE_Recursive_Thread_Mutex,
                    guard,
@@ -1056,7 +1047,7 @@ RecorderImpl::repoid_to_bit_key(const DCPS::RepoId&     id,
 
   DDS::PublicationBuiltinTopicDataSeq data;
 
-  DDS::ReturnCode_t ret = instance_handle_to_bit_data<DDS::PublicationBuiltinTopicDataDataReader_var>(
+  DDS::ReturnCode_t const ret = instance_handle_to_bit_data<DDS::PublicationBuiltinTopicDataDataReader_var>(
                             participant_servant_,
                             BUILT_IN_PUBLICATION_TOPIC,
                             publication_handle,

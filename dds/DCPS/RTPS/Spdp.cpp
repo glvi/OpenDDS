@@ -20,7 +20,7 @@
 #include "dds/DCPS/GuidConverter.h"
 #include "dds/DCPS/Qos_Helper.h"
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 #include "SecurityHelpers.h"
 #include "dds/DCPS/security/framework/SecurityRegistry.h"
 #endif
@@ -59,7 +59,7 @@ namespace {
     return false;
   }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   bool operator==(const DDS::Security::Property_t& rhs, const DDS::Security::Property_t& lhs) {
     return rhs.name == lhs.name && rhs.value == lhs.value && rhs.propagate == lhs.propagate;
   }
@@ -70,7 +70,7 @@ namespace {
 
   bool operator==(const DDS::Security::PropertySeq& rhs, const DDS::Security::PropertySeq& lhs) {
     bool result = (rhs.length() == lhs.length());
-    for (size_t i = 0; result && i < rhs.length(); ++i) {
+    for (unsigned int i = 0; result && i < rhs.length(); ++i) {
       result = (rhs[i] == lhs[i]);
     }
     return result;
@@ -78,7 +78,7 @@ namespace {
 
   bool operator==(const DDS::Security::BinaryPropertySeq& rhs, const DDS::Security::BinaryPropertySeq& lhs) {
     bool result = (rhs.length() == lhs.length());
-    for (size_t i = 0; result && i < rhs.length(); ++i) {
+    for (unsigned int i = 0; result && i < rhs.length(); ++i) {
       result = (rhs[i] == lhs[i]);
     }
     return result;
@@ -148,7 +148,7 @@ Spdp::Spdp(DDS::DomainId_t domain,
   , shutdown_cond_(lock_)
   , shutdown_flag_(false)
   , sedp_(guid_, *this, lock_)
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   , security_config_()
   , security_enabled_(false)
 #endif
@@ -157,13 +157,13 @@ Spdp::Spdp(DDS::DomainId_t domain,
 
   init(domain, guid, qos, disco);
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   init_participant_sec_attributes(participant_sec_attr_);
 #endif
 
 }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 Spdp::Spdp(DDS::DomainId_t domain,
            const DCPS::RepoId& guid,
            const DDS::DomainParticipantQos& qos,
@@ -259,8 +259,13 @@ Spdp::~Spdp()
                  ACE_TEXT("remove discovered participants\n")));
     }
 
-#if defined(OPENDDS_SECURITY)
-    write_secure_disposes();
+#ifdef OPENDDS_SECURITY
+    try {
+      write_secure_disposes();
+    } catch (const CORBA::Exception& e) {
+      ACE_ERROR((LM_ERROR, ACE_TEXT("(%P|%t) ERROR: Spdp::~Spdp() - from ")
+                 ACE_TEXT("write_secure_disposes: %C\n"), e._info().c_str()));
+    }
 #endif
 
     // Iterate through a copy of the repo Ids, rather than the map
@@ -293,7 +298,7 @@ Spdp::~Spdp()
   }
 }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 void
 Spdp::write_secure_updates()
 {
@@ -318,13 +323,24 @@ Spdp::write_secure_disposes()
 }
 #endif
 
+namespace {
+  DDS::ParticipantBuiltinTopicData& partBitData(ParticipantData_t& pdata)
+  {
+#ifdef OPENDDS_SECURITY
+    return pdata.ddsParticipantDataSecure.base.base;
+#else
+    return pdata.ddsParticipantData;
+#endif
+  }
+}
+
 void
-Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscoveredParticipantData& cpdata)
+Spdp::handle_participant_data(DCPS::MessageId id, const ParticipantData_t& cpdata)
 {
   const ACE_Time_Value now = ACE_OS::gettimeofday();
 
   // Make a (non-const) copy so we can tweak values below
-  Security::SPDPdiscoveredParticipantData pdata(cpdata);
+  ParticipantData_t pdata(cpdata);
 
   const DCPS::RepoId guid = make_guid(pdata.participantProxy.guidPrefix, DCPS::ENTITYID_PARTICIPANT);
 
@@ -346,9 +362,9 @@ Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscovered
     }
 
     // copy guid prefix (octet[12]) into BIT key (long[3])
-    std::memcpy(pdata.ddsParticipantDataSecure.base.base.key.value,
+    std::memcpy(partBitData(pdata).key.value,
                 pdata.participantProxy.guidPrefix,
-                sizeof(pdata.ddsParticipantDataSecure.base.base.key.value));
+                sizeof(DDS::BuiltinTopicKey_t));
 
     if (DCPS::DCPS_debug_level) {
       DCPS::GuidConverter local(guid_), remote(guid);
@@ -362,7 +378,7 @@ Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscovered
     participants_[guid] = DiscoveredParticipant(pdata, now);
     DiscoveredParticipant& dp = participants_[guid];
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
     if (is_security_enabled()) {
       // Associate the stateless reader / writer for handshakes & auth requests
       sedp_.associate_preauth(dp.pdata_);
@@ -380,7 +396,7 @@ Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscovered
     // own announcement, so they don't have to wait.
     this->tport_->write_i();
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
     if (is_security_enabled()) {
       bool has_security_data = dp.pdata_.dataKind == Security::DPDK_ENHANCED ||
                                dp.pdata_.dataKind == Security::DPDK_SECURE;
@@ -431,7 +447,7 @@ Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscovered
 
   } else {
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
     // Non-secure updates for authenticated participants are used for liveliness but
     // are otherwise ignored. Non-secure dispose messages are ignored completely.
     if (iter->second.auth_state_ == DCPS::AS_AUTHENTICATED &&
@@ -453,20 +469,19 @@ Spdp::handle_participant_data(DCPS::MessageId id, const Security::SPDPdiscovered
     ACE_Reverse_Lock<ACE_Thread_Mutex> rev_lock(lock_);
 
     // update an existing participant
-    pdata.ddsParticipantDataSecure.base.base.key = iter->second.pdata_.ddsParticipantDataSecure.base.base.key;
+    DDS::ParticipantBuiltinTopicData& pdataBit = partBitData(pdata);
+    DDS::ParticipantBuiltinTopicData& discoveredBit = partBitData(iter->second.pdata_);
+    pdataBit.key = discoveredBit.key;
 #ifndef OPENDDS_SAFETY_PROFILE
     using DCPS::operator!=;
 #endif
-    if (iter->second.pdata_.ddsParticipantDataSecure.base.base.user_data !=
-        pdata.ddsParticipantDataSecure.base.base.user_data) {
-      iter->second.pdata_.ddsParticipantDataSecure.base.base.user_data =
-        pdata.ddsParticipantDataSecure.base.base.user_data;
+    if (discoveredBit.user_data != pdataBit.user_data) {
+      discoveredBit.user_data = pdataBit.user_data;
 #ifndef DDS_HAS_MINIMUM_BIT
       DCPS::ParticipantBuiltinTopicDataDataReaderImpl* bit = part_bit();
       if (bit) {
         ACE_GUARD(ACE_Reverse_Lock<ACE_Thread_Mutex>, rg, rev_lock);
-        bit->store_synthetic_data(pdata.ddsParticipantDataSecure.base.base,
-                                  DDS::NOT_NEW_VIEW_STATE);
+        bit->store_synthetic_data(pdataBit, DDS::NOT_NEW_VIEW_STATE);
       }
 #endif /* DDS_HAS_MINIMUM_BIT */
       // Perform search again, so iterator becomes valid
@@ -485,7 +500,7 @@ Spdp::data_received(const DataSubmessage& data, const ParameterList& plist)
 {
   if (shutdown_flag_.value()) { return; }
 
-  Security::SPDPdiscoveredParticipantData pdata;
+  ParticipantData_t pdata;
   if (ParameterListConverter::from_param_list(plist, pdata) < 0) {
     ACE_ERROR((LM_ERROR, ACE_TEXT("(%P|%t) ERROR: Spdp::data_received - ")
       ACE_TEXT("failed to convert from ParameterList to ")
@@ -510,8 +525,7 @@ Spdp::match_unauthenticated(const DCPS::RepoId& guid, DiscoveredParticipant& dp)
   if (bit) {
     ACE_GUARD(ACE_Reverse_Lock<ACE_Thread_Mutex>, rg, rev_lock);
     bit_instance_handle =
-      bit->store_synthetic_data(dp.pdata_.ddsParticipantDataSecure.base.base,
-                                DDS::NEW_VIEW_STATE);
+      bit->store_synthetic_data(partBitData(dp.pdata_), DDS::NEW_VIEW_STATE);
   }
 #endif /* DDS_HAS_MINIMUM_BIT */
 
@@ -526,7 +540,7 @@ Spdp::match_unauthenticated(const DCPS::RepoId& guid, DiscoveredParticipant& dp)
   }
 }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 void
 Spdp::handle_auth_request(const DDS::Security::ParticipantStatelessMessage& msg)
 {
@@ -648,7 +662,10 @@ Spdp::handle_handshake_message(const DDS::Security::ParticipantStatelessMessage&
     reply.message_data.length(1);
     reply.message_data[0] = msg.message_data[0];
 
-    DDS::Security::ValidationResult_t vr = auth->begin_handshake_reply(dp.handshake_handle_, reply.message_data[0], dp.identity_handle_, identity_handle_, DDS::OctetSeq(temp_buff.length(), &temp_buff), se);
+    const DDS::OctetSeq local_participant(static_cast<unsigned int>(temp_buff.length()), &temp_buff);
+    const DDS::Security::ValidationResult_t vr =
+      auth->begin_handshake_reply(dp.handshake_handle_, reply.message_data[0], dp.identity_handle_,
+                                  identity_handle_, local_participant, se);
     if (vr == DDS::Security::VALIDATION_FAILED) {
       ACE_ERROR((LM_WARNING, ACE_TEXT("(%P|%t) WARNING: Spdp::handle_handshake_message() - ")
         ACE_TEXT("Failed to reply to incoming handshake message. Security Exception[%d.%d]: %C\n"),
@@ -1027,8 +1044,10 @@ Spdp::attempt_authentication(const DCPS::RepoId& guid, DiscoveredParticipant& dp
     }
 
     DDS::Security::HandshakeMessageToken hs_mt;
-
-    if (auth->begin_handshake_request(dp.handshake_handle_, hs_mt, identity_handle_, dp.identity_handle_, DDS::OctetSeq(temp_buff.length(), &temp_buff), se) != DDS::Security::VALIDATION_PENDING_HANDSHAKE_MESSAGE) {
+    const DDS::OctetSeq local_participant(static_cast<unsigned int>(temp_buff.length()), &temp_buff);
+    if (auth->begin_handshake_request(dp.handshake_handle_, hs_mt, identity_handle_, dp.identity_handle_,
+                                      local_participant, se)
+        != DDS::Security::VALIDATION_PENDING_HANDSHAKE_MESSAGE) {
       ACE_ERROR((LM_ERROR, ACE_TEXT("(%P|%t) ERROR: Spdp::attempt_authentication() - ")
         ACE_TEXT("Failed to begin handshake_request. Security Exception[%d.%d]: %C\n"),
           se.code, se.minor_code, se.message.in()));
@@ -1154,8 +1173,12 @@ Spdp::is_opendds(const GUID_t& participant) const
                           DCPS::VENDORID_OCI, sizeof(VendorId_t));
 }
 
-Security::SPDPdiscoveredParticipantData
-Spdp::build_local_pdata(Security::DiscoveredParticipantDataKind kind)
+ParticipantData_t
+Spdp::build_local_pdata(
+#ifdef OPENDDS_SECURITY
+                        Security::DiscoveredParticipantDataKind kind
+#endif
+                        )
 {
   BuiltinEndpointSet_t availableBuiltinEndpoints =
     DISC_BUILTIN_ENDPOINT_PARTICIPANT_ANNOUNCER |
@@ -1168,7 +1191,7 @@ Spdp::build_local_pdata(Security::DiscoveredParticipantDataKind kind)
     BUILTIN_ENDPOINT_PARTICIPANT_MESSAGE_DATA_READER
     ;
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   if (is_security_enabled()) {
     availableBuiltinEndpoints |=
       DDS::Security::SEDP_BUILTIN_PUBLICATIONS_SECURE_WRITER |
@@ -1203,6 +1226,7 @@ Spdp::build_local_pdata(Security::DiscoveredParticipantDataKind kind)
 
   const GuidPrefix_t& gp = guid_.guidPrefix;
 
+#ifdef OPENDDS_SECURITY
   const Security::SPDPdiscoveredParticipantData pdata = {
     kind,
     { // ParticipantBuiltinTopicDataSecure
@@ -1211,35 +1235,23 @@ Spdp::build_local_pdata(Security::DiscoveredParticipantDataKind kind)
           DDS::BuiltinTopicKey_t() /*ignored*/,
           qos_.user_data
         },
-
-#if defined(OPENDDS_SECURITY)
         identity_token_,
         permissions_token_,
-#else
-        DDS::Security::Token(),
-        DDS::Security::Token(),
-#endif
-
         qos_.property,
-
-#if defined(OPENDDS_SECURITY)
         {
           security_attributes_to_bitmask(participant_sec_attr_),
           participant_sec_attr_.plugin_participant_attributes
         }
-#else
-        DDS::Security::ParticipantSecurityInfo()
-#endif
-
       },
-
-#if defined(OPENDDS_SECURITY)
       identity_status_token_
-#else
-      DDS::Security::Token()
-#endif
-
     },
+#else
+  const SPDPdiscoveredParticipantData pdata = {
+    {
+      DDS::BuiltinTopicKey_t() /*ignored*/,
+      qos_.user_data
+    },
+#endif
     { // ParticipantProxy_t
       PROTOCOLVERSION,
       {gp[0], gp[1], gp[2], gp[3], gp[4], gp[5],
@@ -1265,7 +1277,7 @@ Spdp::build_local_pdata(Security::DiscoveredParticipantDataKind kind)
 bool Spdp::announce_domain_participant_qos()
 {
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   if (is_security_enabled())
     write_secure_updates();
 #endif
@@ -1486,15 +1498,11 @@ Spdp::SpdpTransport::write()
 void
 Spdp::SpdpTransport::write_i()
 {
-#if defined(OPENDDS_SECURITY)
-  const Security::SPDPdiscoveredParticipantData& pdata =
-    outer_->build_local_pdata(outer_->is_security_enabled() ?
-                              Security::DPDK_ENHANCED :
-                              Security::DPDK_ORIGINAL);
-#else
-    const Security::SPDPdiscoveredParticipantData& pdata =
-      outer_->build_local_pdata(Security::DPDK_ORIGINAL);
+  const ParticipantData_t pdata = outer_->build_local_pdata(
+#ifdef OPENDDS_SECURITY
+     outer_->is_security_enabled() ? Security::DPDK_ENHANCED : Security::DPDK_ORIGINAL
 #endif
+                                                            );
 
   data_.writerSN.high = seq_.getHigh();
   data_.writerSN.low = seq_.getLow();
@@ -1543,7 +1551,7 @@ Spdp::SpdpTransport::handle_timeout(const ACE_Time_Value& tv, const void*)
     last_disco_resend_ = tv;
   }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   outer_->check_auth_states(tv);
 #endif
 
@@ -1797,7 +1805,7 @@ Spdp::get_discovered_participant_ids(DCPS::RepoIdSet& results) const
   }
 }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 Spdp::ParticipantCryptoInfoPair
 Spdp::lookup_participant_crypto_info(const DCPS::RepoId& id) const
 {

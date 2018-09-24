@@ -21,7 +21,7 @@
 #include "dds/DCPS/RTPS/BaseMessageTypes.h"
 #include "dds/DCPS/RTPS/MessageTypes.h"
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 #include "dds/DCPS/RTPS/SecurityHelpers.h"
 #include "dds/DCPS/security/framework/SecurityRegistry.h"
 #endif
@@ -94,7 +94,7 @@ RtpsUdpDataLink::RtpsUdpDataLink(RtpsUdpTransport& transport,
                      config.heartbeat_response_delay_),
     heartbeat_(make_rch<HeartBeat>(reactor_task->get_reactor(), reactor_task->get_reactor_owner(), this, &RtpsUdpDataLink::send_heartbeats)),
     heartbeatchecker_(make_rch<HeartBeat>(reactor_task->get_reactor(), reactor_task->get_reactor_owner(), this, &RtpsUdpDataLink::check_heartbeats)),
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
     held_data_delivery_handler_(this),
     security_config_(Security::SecurityRegistry::instance()->default_config()),
     local_crypto_handle_(DDS::HANDLE_NIL)
@@ -784,7 +784,7 @@ RtpsUdpDataLink::customize_queue_element(TransportQueueElement* element)
     return element;
   }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   send_strategy()->encode_payload(pub_id, data, subm);
 #endif
 
@@ -1140,10 +1140,10 @@ RtpsUdpDataLink::received(const RTPS::HeartBeatSubmessage& heartbeat,
       RtpsReaderMap::const_iterator riter = readers_.find(readerid);
       if (riter == readers_.end()) {
         // Reader has no associations.
-        interesting_ack_nacks_.insert (InterestingAckNack(writerid, readerid, pos->second.address));
+        interesting_ack_nacks_.insert(InterestingAckNack(writerid, readerid, pos->second.address));
       } else if (riter->second.remote_writers_.find(writerid) == riter->second.remote_writers_.end()) {
         // Reader is not associated with this writer.
-        interesting_ack_nacks_.insert (InterestingAckNack(writerid, readerid, pos->second.address));
+        interesting_ack_nacks_.insert(InterestingAckNack(writerid, readerid, pos->second.address));
       }
       pos->second.last_activity = now;
       if (pos->second.status == InterestingRemote::DOES_NOT_EXIST) {
@@ -1475,7 +1475,7 @@ RtpsUdpDataLink::send_heartbeat_replies() // from DR to DW
 
   for (RtpsReaderMap::iterator rr = readers_.begin(); rr != readers_.end();
        ++rr) {
-    send_ack_nacks (rr);
+    send_ack_nacks(rr);
   }
 }
 
@@ -1902,7 +1902,7 @@ RtpsUdpDataLink::send_nack_replies()
     //track if any messages have been fully acked by all readers
     SequenceNumber all_readers_ack = SequenceNumber::MAX_VALUE;
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
     const EntityId_t& pvs_writer =
       RTPS::ENTITYID_P2P_BUILTIN_PARTICIPANT_VOLATILE_SECURE_WRITER;
     const bool is_pvs_writer =
@@ -1917,7 +1917,7 @@ RtpsUdpDataLink::send_nack_replies()
         all_readers_ack = ri->second.cur_cumulative_ack_;
       }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
       if (is_pvs_writer && !ri->second.requested_changes_.empty()) {
         send_directed_nack_replies(rw->first, writer, ri->first, ri->second);
         continue;
@@ -2479,7 +2479,7 @@ RtpsUdpDataLink::send_heartbeats()
 void
 RtpsUdpDataLink::send_directed_heartbeats(OPENDDS_VECTOR(RTPS::HeartBeatSubmessage)& hbs)
 {
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
   const EntityId_t& volatile_writer =
     RTPS::ENTITYID_P2P_BUILTIN_PARTICIPANT_VOLATILE_SECURE_WRITER;
 
@@ -2565,7 +2565,7 @@ RtpsUdpDataLink::send_heartbeats_manual(const TransportSendControlElement* tsce)
 
   // Populate the recipients.
   OPENDDS_SET(ACE_INET_Addr) recipients;
-  get_locators (pub_id, recipients);
+  get_locators(pub_id, recipients);
   if (recipients.empty()) {
     return;
   }
@@ -2574,8 +2574,8 @@ RtpsUdpDataLink::send_heartbeats_manual(const TransportSendControlElement* tsce)
 
   SequenceNumber firstSN, lastSN;
   CORBA::Long counter;
-  RtpsWriterMap::iterator pos = writers_.find (pub_id);
-  if (pos != writers_.end ()) {
+  RtpsWriterMap::iterator pos = writers_.find(pub_id);
+  if (pos != writers_.end()) {
     // Reliable.
     const bool has_data = !pos->second.send_buff_.is_nil() && !pos->second.send_buff_->empty();
     SequenceNumber durable_max;
@@ -2624,7 +2624,7 @@ RtpsUdpDataLink::send_heartbeats_manual(const TransportSendControlElement* tsce)
   }
 }
 
-#if defined(OPENDDS_SECURITY)
+#ifdef OPENDDS_SECURITY
 void
 RtpsUdpDataLink::populate_security_handles(const RepoId& local_id,
                                            const RepoId& remote_id,
@@ -2797,12 +2797,12 @@ RtpsUdpDataLink::HeartBeat::disable()
 }
 
 void
-RtpsUdpDataLink::send_final_acks (const RepoId& readerid)
+RtpsUdpDataLink::send_final_acks(const RepoId& readerid)
 {
   ACE_GUARD(ACE_Thread_Mutex, g, lock_);
-  RtpsReaderMap::iterator rr = readers_.find (readerid);
-  if (rr != readers_.end ()) {
-    send_ack_nacks (rr, true);
+  RtpsReaderMap::iterator rr = readers_.find(readerid);
+  if (rr != readers_.end()) {
+    send_ack_nacks(rr, true);
   }
 }
 

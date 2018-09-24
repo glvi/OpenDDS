@@ -7,8 +7,12 @@
 #define OPENDDS_ACCESS_PERMISSIONS_H
 
 #include "dds/DCPS/security/SSL/SignedDocument.h"
+#include "dds/DCPS/security/SSL/SubjectName.h"
 #include "Governance.h"
+
 #include <list>
+
+OPENDDS_BEGIN_VERSIONED_NAMESPACE_DECL
 
 namespace OpenDDS {
 namespace Security {
@@ -36,7 +40,7 @@ public:
   };
 
   struct PermissionTopicPsRule {
-    PublishSubscribe_t  ps_type;
+    PublishSubscribe_t ps_type;
     std::vector<std::string> topic_list;
   };
 
@@ -66,7 +70,7 @@ public:
 
   struct PermissionGrantRule {
     std::string grant_name;
-    std::string subject;
+    SSL::SubjectName subject;
     Validity_t validity;
     std::string default_permission;
     TopicRules PermissionTopicRules;
@@ -76,7 +80,6 @@ public:
   typedef std::vector<PermissionGrantRule> PermissionGrantRules;
 
   struct AcPerms {
-    DDS::Security::DomainId_t domain_id;
     PermissionGrantRules perm_rules;
     DDS::Security::PermissionsToken perm_token;
     DDS::Security::PermissionsCredentialToken perm_cred_token;
@@ -91,21 +94,16 @@ public:
     return perm_data_;
   }
 
-  const std::string& subject_name()
-  {
-    return subject_name_;
-  }
+  bool contains_subject_name(const SSL::SubjectName& name) const;
 
 private:
 
-  bool extract_subject_name(const SSL::SignedDocument& doc);
-
   AcPerms perm_data_;
-  std::string subject_name_;
-
 };
 
 }
 }
+
+OPENDDS_END_VERSIONED_NAMESPACE_DECL
 
 #endif

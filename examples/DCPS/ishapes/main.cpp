@@ -1,5 +1,5 @@
 #include <ShapesDialog.hpp>
-#include <QtGui/QApplication>
+#include <QtWidgets/QApplication>
 #include <stdlib.h>
 #include <time.h>
 #include <iostream>
@@ -29,6 +29,7 @@
 using namespace OpenDDS::RTPS;
 using namespace OpenDDS::DCPS;
 
+#ifdef OPENDDS_SECURITY
 // security setup helpers:
 
 const char DDSSEC_PROP_IDENTITY_CA[] = "dds.sec.auth.identity_ca";
@@ -52,6 +53,7 @@ void append(DDS::PropertySeq& props, const char* name, const char* value)
   props.length(len + 1);
   props[len] = prop;
 }
+#endif
 
 int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
   int retval = -1;
@@ -134,10 +136,10 @@ int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
         defaultSize = ACE_OS::atoi(argv[++curr]);
       } else if ((ACE_OS::strcmp(ACE_TEXT("-governance"), argv[curr]) == 0) &&
         (curr + 1 < argc)) {
-        governance = argv[++curr];
+        governance = ACE_TEXT_ALWAYS_CHAR(argv[++curr]);
       } else if ((ACE_OS::strcmp(ACE_TEXT("-permissions"), argv[curr]) == 0) &&
         (curr + 1 < argc)) {
-        permissions = argv[++curr];
+        permissions = ACE_TEXT_ALWAYS_CHAR(argv[++curr]);
       } else {
         std::cout << "Ignoring unknown param: " <<
           ACE_TEXT_ALWAYS_CHAR(argv[curr]) << std::endl;
@@ -151,6 +153,7 @@ int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
     DDS::DomainParticipantQos dp_qos;
     dpf->get_default_participant_qos(dp_qos);
 
+#ifdef OPENDDS_SECURITY
     if (!governance.empty() && !permissions.empty()) {
       TheServiceParticipant->set_security(true);
       DDS::PropertySeq& props = dp_qos.property.value;
@@ -161,6 +164,7 @@ int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
       append(props, DDSSEC_PROP_PERM_GOV_DOC, ("file:" + governance).c_str());
       append(props, DDSSEC_PROP_PERM_DOC, ("file:" + permissions).c_str());
     }
+#endif
 
     // Create DomainParticipant
     DDS::DomainParticipant_var participant =
@@ -181,9 +185,13 @@ int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
     Q_INIT_RESOURCE(ishape);
     // create and show your widgets here
     ShapesDialog shapes(participant, partition, defaultSize);
+
+#ifdef OPENDDS_SECURITY
     if (TheServiceParticipant->get_security()) {
       shapes.setWindowTitle("OpenDDS Security BETA");
     }
+#endif
+
     shapes.show();
     retval = app.exec();
 
@@ -199,4 +207,3 @@ int ACE_TMAIN(int argc, ACE_TCHAR *argv[]) {
 
   return retval;
 }
-

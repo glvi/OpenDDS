@@ -837,7 +837,7 @@ bool CryptoBuiltInImpl::encode_serialized_payload(
   size += pOut->length();
   gen_find_size(footer, size, padding);
 
-  encoded_buffer.length(size + padding);
+  encoded_buffer.length(static_cast<unsigned int>(size + padding));
   ACE_Message_Block mb(to_mb(encoded_buffer.get_buffer()), size + padding);
   Serializer ser(&mb, Serializer::SWAP_BE, Serializer::ALIGN_CDR);
   ser << header;
@@ -922,14 +922,15 @@ bool CryptoBuiltInImpl::encrypt(const KeyMaterial& master, Session& sess,
 
   int len;
   out.length(plain.length() + BLOCK_LEN_BYTES - 1);
-  if (EVP_EncryptUpdate(ctx, out.get_buffer(), &len,
+  unsigned char* const out_buffer = out.get_buffer();
+  if (EVP_EncryptUpdate(ctx, out_buffer, &len,
                         plain.get_buffer(), plain.length()) != 1) {
     CommonUtilities::set_security_error(ex, -1, 0, "EVP_EncryptUpdate");
     return false;
   }
 
   int padLen;
-  if (EVP_EncryptFinal_ex(ctx, out.get_buffer() + len, &padLen) != 1) {
+  if (EVP_EncryptFinal_ex(ctx, out_buffer + len, &padLen) != 1) {
     CommonUtilities::set_security_error(ex, -1, 0, "EVP_EncryptFinal_ex");
     return false;
   }
@@ -1065,7 +1066,7 @@ bool CryptoBuiltInImpl::encode_submessage(
   size_t preFooter = size + padding;
   gen_find_size(footer, size, padding);
 
-  encoded_rtps_submessage.length(size + padding);
+  encoded_rtps_submessage.length(static_cast<unsigned int>(size + padding));
   ACE_Message_Block mb(to_mb(encoded_rtps_submessage.get_buffer()),
                        size + padding);
   Serializer ser(&mb, Serializer::SWAP_BE, Serializer::ALIGN_CDR);
@@ -1419,8 +1420,9 @@ bool CryptoBuiltInImpl::decrypt(const KeyMaterial& master, Session& sess,
   }
 
   out.length(n + KEY_LEN_BYTES);
+  unsigned char* const out_buffer = out.get_buffer();
   int len;
-  if (EVP_DecryptUpdate(ctx, out.get_buffer(), &len,
+  if (EVP_DecryptUpdate(ctx, out_buffer, &len,
                         reinterpret_cast<const unsigned char*>(ciphertext), n)
       != 1) {
     CommonUtilities::set_security_error(ex, -1, 0, "EVP_DecryptUpdate");
@@ -1438,7 +1440,7 @@ bool CryptoBuiltInImpl::decrypt(const KeyMaterial& master, Session& sess,
   }
 
   int len2;
-  if (EVP_DecryptFinal_ex(ctx, out.get_buffer() + len, &len2) == 1) {
+  if (EVP_DecryptFinal_ex(ctx, out_buffer + len, &len2) == 1) {
     out.length(len + len2);
     return true;
   }
